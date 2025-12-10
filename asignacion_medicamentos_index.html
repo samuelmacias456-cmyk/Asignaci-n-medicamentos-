@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Asignación de Medicamentos</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+  <style>
+    body { margin: 0; font-family: Arial; display: flex; height: 100vh; }
+    #sidebar { width: 320px; background: #f4f4f4; padding: 15px; overflow-y: auto; border-right: 2px solid #ccc; }
+    #map { flex: 1; }
+    h2 { margin-top: 0; }
+    .slider-box { margin-bottom: 15px; }
+    .high { color: red; font-weight: bold; }
+    .medium { color: orange; font-weight: bold; }
+    .low { color: green; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Panel de Control</h2>
+
+    <h3>Pesos de Cálculo</h3>
+    <div class="slider-box">
+      <label>Peso Fecha (caducidad): <span id="w_fecha_val">0.35</span></label>
+      <input type="range" id="w_fecha" min="0" max="1" step="0.01" value="0.35" />
+    </div>
+    <div class="slider-box">
+      <label>Peso Peligro: <span id="w_peligro_val">0.35</span></label>
+      <input type="range" id="w_peligro" min="0" max="1" step="0.01" value="0.35" />
+    </div>
+    <div class="slider-box">
+      <label>Peso Cantidad: <span id="w_cant_val">0.15</span></label>
+      <input type="range" id="w_cant" min="0" max="1" step="0.01" value="0.15" />
+    </div>
+    <div class="slider-box">
+      <label>Peso Distancia: <span id="w_dist_val">0.15</span></label>
+      <input type="range" id="w_dist" min="0" max="1" step="0.01" value="0.15" />
+    </div>
+
+    <button onclick="exportarCSV()">Exportar CSV</button>
+    <button onclick="exportarJSON()">Exportar JSON</button>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    const puntos = [
+      { id: "P1", nombre: "Farmacia Centro", lat: 21.000, lon: -101.000, cap: 100 },
+      { id: "P2", nombre: "Centro Salud Norte", lat: 21.010, lon: -101.005, cap: 80 },
+      { id: "P3", nombre: "Punto Municipal", lat: 20.995, lon: -100.990, cap: 50 },
+    ];
+
+    const usuarios = [
+      { id: "U1", lat: 21.002, lon: -101.002 },
+      { id: "U2", lat: 21.008, lon: -101.000 },
+      { id: "U3", lat: 20.998, lon: -100.996 },
+    ];
+
+    const meds = {
+      U1: [
+        { nombre: "Amoxicilina", tipo: "Antibiótico", cant: 20, cad: 10, peligro: 5 },
+        { nombre: "Paracetamol", tipo: "Analgésico", cant: 10, cad: 400, peligro: 1 },
+      ],
+      U2: [
+        { nombre: "Fluoxetina", tipo: "Psicotrópico", cant: 30, cad: -2, peligro: 5 },
+      ],
+      U3: [
+        { nombre: "Ibuprofeno", tipo: "AINE", cant: 5, cad: 60, peligro: 1 },
+      ],
+    };
+
+    let map = L.map('map').setView([21.0, -101.0], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    function asignarPrioridad() {
+      let resultados = [];
+
+      let w_fecha = parseFloat(document.getElementById("w_fecha").value);
+      let w_peligro = parseFloat(document.getElementById("w_peligro").value);
+      let w_cant = parseFloat(document.getElementById("w_cant").value);
+      let w_dist = parseFloat(document.getElementById("w_dist").value);
+
+      usuarios.forEach(u => {
+        let medsU = meds[u.id] || [];
+        if (!medsU.length) return;
+
+        let peorPeligro = Math.max(...medsU.map(m => m.peligro));
+        let menorCad = Math.min(...medsU.map(m => m.cad));
+        let totalCant = medsU.reduce((a,b) => a + b.cant, 0);
+
+        let prScore = w_fecha * Math.max(0, 1 - menorCad/400) +
+                      w_peligro * (peorPeligro/5) +
+                      w_cant * (totalCant/30);
+
+        let mejor = null, mejorScore = -999;
+
+        puntos.forEach(p => {
+          let dist = Math.hypot(u.lat - p.lat, u.lon - p.lon);
+          let scoreFinal = prScore - w_dist * dist;
+          if (scoreFinal > mejorScore) {
+            mejorScore = scoreFinal;
+            mejor = p;
+          }
+        });
+
+        resultados.push({ usuario: u, mejor, score: prScore });
+      });
+
+      return resultados;
+    }
+
+    let capaUsuarios = L.layerGroup().addTo(map);
+    let capaLineas = L.layerGroup().addTo(map);
+
+    function dibujar() {
+      capaUsuarios.clearLayers();
+      capaLineas.clearLayers();
+
+      let res = asignarPrioridad();
+
+      res.forEach(r => {
+        let color = r.score > 0.7 ? 'red' : r.score > 0.4 ? 'orange' : 'green';
+
+        let marker = L.circleMarker([r.usuario.lat, r.usuario.lon], {
+          radius: 8,
+          color: color,
+          fillOpacity: 0.7
+        }).addTo(capaUsuarios);
+
+        marker.bindPopup(`Usuario: ${r.usuario.id}<br>
+          Prioridad: <b style="color:${color}">${r.score.toFixed(2)}</b><br>
+          Punto asignado: <b>${r.mejor.nombre}</b>`);
+
+        L.polyline([
+          [r.usuario.lat, r.usuario.lon],
+          [r.mejor.lat, r.mejor.lon]
+        ], { color }).addTo(capaLineas);
+      });
+    }
+
+    dibujar();
+
+    document.querySelectorAll('input[type=range]').forEach(sl => {
+      sl.addEventListener('input', () => {
+        document.getElementById(sl.id + '_val').textContent = sl.value;
+        dibujar();
+      });
+    });
+
+    function exportarCSV() {
+      let res = asignarPrioridad();
+      let contenido = "usuario,punto,prioridad
+";
+      res.forEach(r => contenido += `${r.usuario.id},${r.mejor.nombre},${r.score.toFixed(2)}
+`);
+      let blob = new Blob([contenido], { type: 'text/csv' });
+      saveAs(blob, 'asignacion.csv');
+    }
+
+    function exportarJSON() {
+      let res = asignarPrioridad();
+      let blob = new Blob([JSON.stringify(res, null, 2)], { type: 'application/json' });
+      saveAs(blob, 'asignacion.json');
+    }
+  </script>
+</body>
+</html>
